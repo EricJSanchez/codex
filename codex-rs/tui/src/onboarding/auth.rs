@@ -5,10 +5,13 @@ use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::read_openai_api_key_from_env;
+use codex_core::config::OidcConfig;
 use codex_login::DeviceCode;
+use codex_login::OidcLoginOptions;
 use codex_login::ServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
+use codex_login::run_oidc_login;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -91,6 +94,8 @@ pub(crate) enum SignInState {
     ChatGptSuccess,
     ApiKeyEntry(ApiKeyInputState),
     ApiKeyConfigured,
+    OidcInProgress,
+    OidcSuccess,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +103,7 @@ pub(crate) enum SignInOption {
     ChatGpt,
     DeviceCode,
     ApiKey,
+    CustomOidc,
 }
 
 const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
@@ -151,6 +157,9 @@ impl KeyboardHandler for AuthModeWidget {
             KeyCode::Char('3') => {
                 self.select_option_by_index(/*index*/ 2);
             }
+            KeyCode::Char('4') => {
+                self.select_option_by_index(/*index*/ 3);
+            }
             KeyCode::Enter => {
                 let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
                 match sign_in_state {
@@ -180,6 +189,11 @@ impl KeyboardHandler for AuthModeWidget {
                         drop(sign_in_state);
                         self.request_frame.schedule_frame();
                     }
+                    SignInState::OidcInProgress => {
+                        *sign_in_state = SignInState::PickMode;
+                        drop(sign_in_state);
+                        self.request_frame.schedule_frame();
+                    }
                     _ => {}
                 }
             }
@@ -204,6 +218,7 @@ pub(crate) struct AuthModeWidget {
     pub auth_manager: Arc<AuthManager>,
     pub forced_chatgpt_workspace_id: Option<String>,
     pub forced_login_method: Option<ForcedLoginMethod>,
+    pub oidc_config: Option<OidcConfig>,
     pub animations_enabled: bool,
 }
 
@@ -224,6 +239,9 @@ impl AuthModeWidget {
         if self.is_api_login_allowed() {
             options.push(SignInOption::ApiKey);
         }
+        if self.oidc_config.is_some() {
+            options.push(SignInOption::CustomOidc);
+        }
         options
     }
 
@@ -235,6 +253,9 @@ impl AuthModeWidget {
         }
         if self.is_api_login_allowed() {
             options.push(SignInOption::ApiKey);
+        }
+        if self.oidc_config.is_some() {
+            options.push(SignInOption::CustomOidc);
         }
         options
     }
@@ -279,6 +300,9 @@ impl AuthModeWidget {
                 } else {
                     self.disallow_api_login();
                 }
+            }
+            SignInOption::CustomOidc => {
+                self.start_oidc_login();
             }
         }
     }
@@ -363,6 +387,14 @@ impl AuthModeWidget {
                         option,
                         "Provide your own API key",
                         "Pay for what you use",
+                    ));
+                }
+                SignInOption::CustomOidc => {
+                    lines.extend(create_mode_item(
+                        idx,
+                        option,
+                        "Sign in with OIDC",
+                        "Use your organization's identity provider",
                     ));
                 }
             }
@@ -784,6 +816,75 @@ impl AuthModeWidget {
         );
         headless_chatgpt_login::start_headless_chatgpt_login(self, opts);
     }
+
+    fn start_oidc_login(&mut self) {
+        let oidc_config = match &self.oidc_config {
+            Some(c) => c.clone(),
+            None => {
+                self.error = Some("OIDC not configured. Add [oidc] to config.toml.".to_string());
+                self.request_frame.schedule_frame();
+                return;
+            }
+        };
+
+        self.error = None;
+        *self.sign_in_state.write().unwrap() = SignInState::OidcInProgress;
+        self.request_frame.schedule_frame();
+
+        let opts = OidcLoginOptions {
+            codex_home: self.codex_home.clone(),
+            issuer: oidc_config.issuer,
+            client_id: oidc_config.client_id,
+            scopes: oidc_config.scopes,
+            callback_port: oidc_config.callback_port,
+            cli_auth_credentials_store_mode: self.cli_auth_credentials_store_mode,
+        };
+
+        let sign_in_state = self.sign_in_state.clone();
+        let request_frame = self.request_frame.clone();
+        let auth_manager = self.auth_manager.clone();
+        tokio::spawn(async move {
+            match run_oidc_login(opts).await {
+                Ok(()) => {
+                    auth_manager.reload();
+                    *sign_in_state.write().unwrap() = SignInState::OidcSuccess;
+                }
+                Err(e) => {
+                    tracing::error!("OIDC login failed: {e}");
+                    *sign_in_state.write().unwrap() = SignInState::PickMode;
+                }
+            }
+            request_frame.schedule_frame();
+        });
+    }
+
+    fn render_oidc_in_progress(&self, area: Rect, buf: &mut Buffer) {
+        let mut spans = vec!["  ".into()];
+        if self.animations_enabled {
+            self.request_frame
+                .schedule_frame_in(std::time::Duration::from_millis(100));
+            spans.extend(shimmer_spans(
+                "Signing in via OIDC – complete login in your browser",
+            ));
+        } else {
+            spans.push("Signing in via OIDC – complete login in your browser".into());
+        }
+        let lines = vec![
+            spans.into(),
+            "".into(),
+            "  Press Esc to cancel".dim().into(),
+        ];
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn render_oidc_success(&self, area: Rect, buf: &mut Buffer) {
+        let lines = vec!["✓ Signed in with OIDC".fg(Color::Green).into()];
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
 }
 
 impl StepStateProvider for AuthModeWidget {
@@ -794,8 +895,11 @@ impl StepStateProvider for AuthModeWidget {
             | SignInState::ApiKeyEntry(_)
             | SignInState::ChatGptContinueInBrowser(_)
             | SignInState::ChatGptDeviceCode(_)
-            | SignInState::ChatGptSuccessMessage => StepState::InProgress,
-            SignInState::ChatGptSuccess | SignInState::ApiKeyConfigured => StepState::Complete,
+            | SignInState::ChatGptSuccessMessage
+            | SignInState::OidcInProgress => StepState::InProgress,
+            SignInState::ChatGptSuccess
+            | SignInState::ApiKeyConfigured
+            | SignInState::OidcSuccess => StepState::Complete,
         }
     }
 }
@@ -824,6 +928,12 @@ impl WidgetRef for AuthModeWidget {
             }
             SignInState::ApiKeyConfigured => {
                 self.render_api_key_configured(area, buf);
+            }
+            SignInState::OidcInProgress => {
+                self.render_oidc_in_progress(area, buf);
+            }
+            SignInState::OidcSuccess => {
+                self.render_oidc_success(area, buf);
             }
         }
     }
@@ -855,6 +965,7 @@ mod tests {
             ),
             forced_chatgpt_workspace_id: None,
             forced_login_method: Some(ForcedLoginMethod::Chatgpt),
+            oidc_config: None,
             animations_enabled: true,
         };
         (widget, codex_home)

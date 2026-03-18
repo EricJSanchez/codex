@@ -99,6 +99,7 @@ impl OnboardingScreen {
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
                 Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
+                Some(ForcedLoginMethod::Oidc) => SignInOption::CustomOidc,
                 _ => SignInOption::ChatGpt,
             };
             if let Some(app_server_request_handle) = app_server_request_handle {
@@ -113,6 +114,7 @@ impl OnboardingScreen {
                     app_server_request_handle,
                     forced_chatgpt_workspace_id,
                     forced_login_method,
+                    oidc_configured: config.oidc.is_some(),
                     animations_enabled: config.animations,
                 }));
             } else {

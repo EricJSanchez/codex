@@ -40,6 +40,12 @@ pub enum AuthMode {
     #[ts(rename = "chatgptAuthTokens")]
     #[strum(serialize = "chatgptAuthTokens")]
     ChatgptAuthTokens,
+    /// Custom OIDC identity provider login. The access token from the IdP is
+    /// used directly as a Bearer token for LLM API calls.
+    #[serde(rename = "customOidc")]
+    #[ts(rename = "customOidc")]
+    #[strum(serialize = "customOidc")]
+    CustomOidc,
 }
 
 macro_rules! experimental_reason_expr {

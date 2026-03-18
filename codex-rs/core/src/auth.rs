@@ -45,6 +45,7 @@ use thiserror::Error;
 pub enum AuthMode {
     ApiKey,
     Chatgpt,
+    CustomOidc,
 }
 
 impl From<AuthMode> for TelemetryAuthMode {
@@ -52,6 +53,7 @@ impl From<AuthMode> for TelemetryAuthMode {
         match mode {
             AuthMode::ApiKey => TelemetryAuthMode::ApiKey,
             AuthMode::Chatgpt => TelemetryAuthMode::Chatgpt,
+            AuthMode::CustomOidc => TelemetryAuthMode::CustomOidc,
         }
     }
 }
@@ -62,6 +64,7 @@ pub enum CodexAuth {
     ApiKey(ApiKeyAuth),
     Chatgpt(ChatgptAuth),
     ChatgptAuthTokens(ChatgptAuthTokens),
+    CustomOidc(CustomOidcAuth),
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +81,11 @@ pub struct ChatgptAuth {
 #[derive(Debug, Clone)]
 pub struct ChatgptAuthTokens {
     state: ChatgptAuthState,
+}
+
+#[derive(Debug, Clone)]
+pub struct CustomOidcAuth {
+    access_token: String,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +179,17 @@ impl CodexAuth {
             return Ok(CodexAuth::from_api_key_with_client(api_key, client));
         }
 
+        if auth_mode == ApiAuthMode::CustomOidc {
+            let Some(api_key) = auth_dot_json.openai_api_key.as_deref() else {
+                return Err(std::io::Error::other(
+                    "Custom OIDC auth is missing an access token.",
+                ));
+            };
+            return Ok(Self::CustomOidc(CustomOidcAuth {
+                access_token: api_key.to_owned(),
+            }));
+        }
+
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
         let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
@@ -185,7 +204,9 @@ impl CodexAuth {
             ApiAuthMode::ChatgptAuthTokens => {
                 Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state }))
             }
-            ApiAuthMode::ApiKey => unreachable!("api key mode is handled above"),
+            ApiAuthMode::ApiKey | ApiAuthMode::CustomOidc => {
+                unreachable!("api key and custom oidc modes are handled above")
+            }
         }
     }
 
@@ -205,6 +226,7 @@ impl CodexAuth {
         match self {
             Self::ApiKey(_) => AuthMode::ApiKey,
             Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => AuthMode::Chatgpt,
+            Self::CustomOidc(_) => AuthMode::CustomOidc,
         }
     }
 
@@ -213,6 +235,7 @@ impl CodexAuth {
             Self::ApiKey(_) => ApiAuthMode::ApiKey,
             Self::Chatgpt(_) => ApiAuthMode::Chatgpt,
             Self::ChatgptAuthTokens(_) => ApiAuthMode::ChatgptAuthTokens,
+            Self::CustomOidc(_) => ApiAuthMode::CustomOidc,
         }
     }
 
@@ -232,7 +255,7 @@ impl CodexAuth {
     pub fn api_key(&self) -> Option<&str> {
         match self {
             Self::ApiKey(auth) => Some(auth.api_key.as_str()),
-            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => None,
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) | Self::CustomOidc(_) => None,
         }
     }
 
@@ -253,6 +276,7 @@ impl CodexAuth {
     pub fn get_token(&self) -> Result<String, std::io::Error> {
         match self {
             Self::ApiKey(auth) => Ok(auth.api_key.clone()),
+            Self::CustomOidc(auth) => Ok(auth.access_token.clone()),
             Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => {
                 let access_token = self.get_token_data()?.access_token;
                 Ok(access_token)
@@ -310,7 +334,7 @@ impl CodexAuth {
         let state = match self {
             Self::Chatgpt(auth) => &auth.state,
             Self::ChatgptAuthTokens(auth) => &auth.state,
-            Self::ApiKey(_) => return None,
+            Self::ApiKey(_) | Self::CustomOidc(_) => return None,
         };
         #[expect(clippy::unwrap_used)]
         state.auth_dot_json.lock().unwrap().clone()
@@ -416,6 +440,23 @@ pub fn login_with_api_key(
     save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
 }
 
+/// Writes an `auth.json` that stores a custom OIDC access token.
+/// The token is persisted in the `openai_api_key` field and used directly
+/// as a Bearer token for LLM API calls.
+pub fn login_with_oidc_token(
+    codex_home: &Path,
+    access_token: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<()> {
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(ApiAuthMode::CustomOidc),
+        openai_api_key: Some(access_token.to_string()),
+        tokens: None,
+        last_refresh: None,
+    };
+    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
+}
+
 /// Writes an in-memory auth payload for externally managed ChatGPT tokens.
 pub fn login_with_chatgpt_auth_tokens(
     codex_home: &Path,
@@ -472,12 +513,17 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
         let method_violation = match (required_method, auth.auth_mode()) {
             (ForcedLoginMethod::Api, AuthMode::ApiKey) => None,
             (ForcedLoginMethod::Chatgpt, AuthMode::Chatgpt) => None,
-            (ForcedLoginMethod::Api, AuthMode::Chatgpt) => Some(
+            (ForcedLoginMethod::Oidc, AuthMode::CustomOidc) => None,
+            (ForcedLoginMethod::Api, AuthMode::Chatgpt | AuthMode::CustomOidc) => Some(
                 "API key login is required, but ChatGPT is currently being used. Logging out."
                     .to_string(),
             ),
-            (ForcedLoginMethod::Chatgpt, AuthMode::ApiKey) => Some(
+            (ForcedLoginMethod::Chatgpt, AuthMode::ApiKey | AuthMode::CustomOidc) => Some(
                 "ChatGPT login is required, but an API key is currently being used. Logging out."
+                    .to_string(),
+            ),
+            (ForcedLoginMethod::Oidc, AuthMode::ApiKey | AuthMode::Chatgpt) => Some(
+                "OIDC login is required, but a different login method is currently being used. Logging out."
                     .to_string(),
             ),
         };
@@ -1319,7 +1365,7 @@ impl AuthManager {
                     .await?;
                 Ok(())
             }
-            CodexAuth::ApiKey(_) => Ok(()),
+            CodexAuth::ApiKey(_) | CodexAuth::CustomOidc(_) => Ok(()),
         }
     }
 

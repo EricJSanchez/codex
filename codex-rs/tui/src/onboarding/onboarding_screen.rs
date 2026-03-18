@@ -96,6 +96,7 @@ impl OnboardingScreen {
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
                 Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
+                Some(ForcedLoginMethod::Oidc) => SignInOption::CustomOidc,
                 _ => SignInOption::ChatGpt,
             };
             steps.push(Step::Auth(AuthModeWidget {
@@ -109,6 +110,7 @@ impl OnboardingScreen {
                 auth_manager,
                 forced_chatgpt_workspace_id,
                 forced_login_method,
+                oidc_config: config.oidc.clone(),
                 animations_enabled: config.animations,
             }))
         }

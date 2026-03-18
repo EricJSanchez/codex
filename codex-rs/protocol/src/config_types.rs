@@ -259,6 +259,7 @@ pub enum ServiceTier {
 pub enum ForcedLoginMethod {
     Chatgpt,
     Api,
+    Oidc,
 }
 
 /// Represents the trust level for a project directory.

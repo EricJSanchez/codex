@@ -14,9 +14,11 @@ use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::logout;
 use codex_core::config::Config;
+use codex_login::OidcLoginOptions;
 use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
+use codex_login::run_oidc_login;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
@@ -187,6 +189,54 @@ pub async fn run_login_with_api_key(
     }
 }
 
+const OIDC_CONFIG_MISSING_MESSAGE: &str =
+    "OIDC login requires [oidc] configuration in config.toml. Please add issuer and client_id.";
+const OIDC_LOGIN_DISABLED_MESSAGE: &str =
+    "OIDC login is not allowed by the current forced_login_method setting.";
+
+pub async fn run_login_with_oidc(cli_config_overrides: CliConfigOverrides) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let _login_log_guard = init_login_file_logging(&config);
+    tracing::info!("starting custom OIDC login flow");
+
+    // Respect forced_login_method: only Oidc (or unset) is allowed.
+    match config.forced_login_method {
+        Some(ForcedLoginMethod::Api) | Some(ForcedLoginMethod::Chatgpt) => {
+            eprintln!("{OIDC_LOGIN_DISABLED_MESSAGE}");
+            std::process::exit(1);
+        }
+        _ => {}
+    }
+
+    let oidc_config = match &config.oidc {
+        Some(c) => c.clone(),
+        None => {
+            eprintln!("{OIDC_CONFIG_MISSING_MESSAGE}");
+            std::process::exit(1);
+        }
+    };
+
+    let opts = OidcLoginOptions {
+        codex_home: config.codex_home.clone(),
+        issuer: oidc_config.issuer,
+        client_id: oidc_config.client_id,
+        scopes: oidc_config.scopes,
+        callback_port: oidc_config.callback_port,
+        cli_auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
+    };
+
+    match run_oidc_login(opts).await {
+        Ok(()) => {
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("Error logging in with OIDC: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 pub fn read_api_key_from_stdin() -> String {
     let mut stdin = std::io::stdin();
 
@@ -330,6 +380,10 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
             },
             AuthMode::Chatgpt => {
                 eprintln!("Logged in using ChatGPT");
+                std::process::exit(0);
+            }
+            AuthMode::CustomOidc => {
+                eprintln!("Logged in using custom OIDC");
                 std::process::exit(0);
             }
         },

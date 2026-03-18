@@ -94,6 +94,8 @@ pub(crate) enum SignInState {
     ChatGptSuccess,
     ApiKeyEntry(ApiKeyInputState),
     ApiKeyConfigured,
+    #[allow(dead_code)]
+    OidcSuccess,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +103,7 @@ pub(crate) enum SignInOption {
     ChatGpt,
     DeviceCode,
     ApiKey,
+    CustomOidc,
 }
 
 const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
@@ -150,6 +153,9 @@ impl KeyboardHandler for AuthModeWidget {
             }
             KeyCode::Char('3') => {
                 self.select_option_by_index(/*index*/ 2);
+            }
+            KeyCode::Char('4') => {
+                self.select_option_by_index(/*index*/ 3);
             }
             KeyCode::Enter => {
                 let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
@@ -219,6 +225,7 @@ pub(crate) struct AuthModeWidget {
     pub app_server_request_handle: AppServerRequestHandle,
     pub forced_chatgpt_workspace_id: Option<String>,
     pub forced_login_method: Option<ForcedLoginMethod>,
+    pub oidc_configured: bool,
     pub animations_enabled: bool,
 }
 
@@ -247,6 +254,9 @@ impl AuthModeWidget {
         if self.is_api_login_allowed() {
             options.push(SignInOption::ApiKey);
         }
+        if self.oidc_configured {
+            options.push(SignInOption::CustomOidc);
+        }
         options
     }
 
@@ -258,6 +268,9 @@ impl AuthModeWidget {
         }
         if self.is_api_login_allowed() {
             options.push(SignInOption::ApiKey);
+        }
+        if self.oidc_configured {
+            options.push(SignInOption::CustomOidc);
         }
         options
     }
@@ -302,6 +315,11 @@ impl AuthModeWidget {
                 } else {
                     self.disallow_api_login();
                 }
+            }
+            SignInOption::CustomOidc => {
+                self.set_error(Some(APP_SERVER_TUI_UNSUPPORTED_MESSAGE.to_string()));
+                *self.sign_in_state.write().unwrap() = SignInState::PickMode;
+                self.request_frame.schedule_frame();
             }
         }
     }
@@ -386,6 +404,14 @@ impl AuthModeWidget {
                         option,
                         "Provide your own API key",
                         "Pay for what you use",
+                    ));
+                }
+                SignInOption::CustomOidc => {
+                    lines.extend(create_mode_item(
+                        idx,
+                        option,
+                        "Sign in with OIDC",
+                        "Use your organization's identity provider",
                     ));
                 }
             }
@@ -848,7 +874,9 @@ impl StepStateProvider for AuthModeWidget {
             | SignInState::ChatGptContinueInBrowser(_)
             | SignInState::ChatGptDeviceCode(_)
             | SignInState::ChatGptSuccessMessage => StepState::InProgress,
-            SignInState::ChatGptSuccess | SignInState::ApiKeyConfigured => StepState::Complete,
+            SignInState::ChatGptSuccess
+            | SignInState::ApiKeyConfigured
+            | SignInState::OidcSuccess => StepState::Complete,
         }
     }
 }
@@ -877,6 +905,12 @@ impl WidgetRef for AuthModeWidget {
             }
             SignInState::ApiKeyConfigured => {
                 self.render_api_key_configured(area, buf);
+            }
+            SignInState::OidcSuccess => {
+                let lines = vec!["✓ Signed in with OIDC".fg(Color::Green).into()];
+                Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .render(area, buf);
             }
         }
     }
@@ -940,6 +974,7 @@ mod tests {
             app_server_request_handle: AppServerRequestHandle::InProcess(client.request_handle()),
             forced_chatgpt_workspace_id: None,
             forced_login_method: Some(ForcedLoginMethod::Chatgpt),
+            oidc_configured: false,
             animations_enabled: true,
         };
         (widget, codex_home)

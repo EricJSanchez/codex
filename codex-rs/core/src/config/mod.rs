@@ -501,6 +501,9 @@ pub struct Config {
     /// When set, restricts the login mechanism users may use.
     pub forced_login_method: Option<ForcedLoginMethod>,
 
+    /// Custom OIDC identity provider configuration for PKCE login.
+    pub oidc: Option<OidcConfig>,
+
     /// Include the `apply_patch` tool for models that benefit from invoking
     /// file edits as a structured tool call. When unset, this falls back to the
     /// model info's default preference.
@@ -1249,6 +1252,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub forced_login_method: Option<ForcedLoginMethod>,
 
+    /// Custom OIDC identity provider configuration for PKCE login.
+    #[serde(default)]
+    pub oidc: Option<OidcConfig>,
+
     /// Preferred backend for storing CLI auth credentials.
     /// file (default): Use a file in the Codex home directory.
     /// keyring: Use an OS-specific keyring service.
@@ -1519,6 +1526,25 @@ impl ProjectConfig {
     pub fn is_untrusted(&self) -> bool {
         matches!(self.trust_level, Some(TrustLevel::Untrusted))
     }
+}
+
+/// Custom OIDC identity provider configuration for PKCE login.
+///
+/// When present, the TUI and CLI expose an additional "Sign in with OIDC" option.
+/// The access token obtained from the IdP is used directly as a Bearer token for
+/// LLM API calls.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct OidcConfig {
+    /// OIDC issuer URL, e.g. "https://idp.example.com".
+    /// The well-known discovery endpoint is derived as `{issuer}/.well-known/openid-configuration`.
+    pub issuer: String,
+    /// OAuth2 client_id registered on your IdP.
+    pub client_id: String,
+    /// Scopes to request. Defaults to "openid profile email".
+    pub scopes: Option<String>,
+    /// Local callback port for the redirect URI. Defaults to 1456.
+    pub callback_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -2714,6 +2740,7 @@ impl Config {
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
             forced_chatgpt_workspace_id,
             forced_login_method,
+            oidc: cfg.oidc,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,

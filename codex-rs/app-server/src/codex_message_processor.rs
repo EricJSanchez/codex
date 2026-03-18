@@ -1457,6 +1457,7 @@ impl CodexMessageProcessor {
                         }
                     }
                 }
+                CoreAuthMode::CustomOidc => Some(Account::ApiKey {}),
             },
             None => None,
         };
