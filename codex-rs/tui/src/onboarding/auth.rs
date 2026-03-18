@@ -239,9 +239,7 @@ impl AuthModeWidget {
         if self.is_api_login_allowed() {
             options.push(SignInOption::ApiKey);
         }
-        if self.oidc_config.is_some() {
-            options.push(SignInOption::CustomOidc);
-        }
+        options.push(SignInOption::CustomOidc);
         options
     }
 
@@ -254,9 +252,7 @@ impl AuthModeWidget {
         if self.is_api_login_allowed() {
             options.push(SignInOption::ApiKey);
         }
-        if self.oidc_config.is_some() {
-            options.push(SignInOption::CustomOidc);
-        }
+        options.push(SignInOption::CustomOidc);
         options
     }
 
@@ -818,14 +814,7 @@ impl AuthModeWidget {
     }
 
     fn start_oidc_login(&mut self) {
-        let oidc_config = match &self.oidc_config {
-            Some(c) => c.clone(),
-            None => {
-                self.error = Some("OIDC not configured. Add [oidc] to config.toml.".to_string());
-                self.request_frame.schedule_frame();
-                return;
-            }
-        };
+        let oidc_config = self.oidc_config.clone().unwrap_or_default();
 
         self.error = None;
         *self.sign_in_state.write().unwrap() = SignInState::OidcInProgress;

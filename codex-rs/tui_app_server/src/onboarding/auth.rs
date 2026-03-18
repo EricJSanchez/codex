@@ -254,9 +254,7 @@ impl AuthModeWidget {
         if self.is_api_login_allowed() {
             options.push(SignInOption::ApiKey);
         }
-        if self.oidc_configured {
-            options.push(SignInOption::CustomOidc);
-        }
+        options.push(SignInOption::CustomOidc);
         options
     }
 
@@ -269,9 +267,7 @@ impl AuthModeWidget {
         if self.is_api_login_allowed() {
             options.push(SignInOption::ApiKey);
         }
-        if self.oidc_configured {
-            options.push(SignInOption::CustomOidc);
-        }
+        options.push(SignInOption::CustomOidc);
         options
     }
 

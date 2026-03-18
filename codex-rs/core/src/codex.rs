@@ -485,6 +485,22 @@ impl Codex {
                 .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?
         };
 
+        // If the current auth mode is CustomOidc and the OIDC config specifies
+        // an api_base_url, override the model provider's base_url so that LLM
+        // requests are routed to the user's own endpoint.
+        if let Some(auth) = auth_manager.auth_cached() {
+            if auth.api_auth_mode() == codex_app_server_protocol::AuthMode::CustomOidc {
+                let oidc_base_url = config
+                    .oidc
+                    .as_ref()
+                    .and_then(|c| c.api_base_url.clone())
+                    .or_else(|| crate::config::OidcConfig::default().api_base_url);
+                if let Some(base_url) = oidc_base_url {
+                    config.model_provider.base_url = Some(base_url);
+                }
+            }
+        }
+
         let config = Arc::new(config);
         let refresh_strategy = match session_source {
             SessionSource::SubAgent(_) => crate::models_manager::manager::RefreshStrategy::Offline,

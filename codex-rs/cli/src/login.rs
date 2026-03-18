@@ -189,8 +189,6 @@ pub async fn run_login_with_api_key(
     }
 }
 
-const OIDC_CONFIG_MISSING_MESSAGE: &str =
-    "OIDC login requires [oidc] configuration in config.toml. Please add issuer and client_id.";
 const OIDC_LOGIN_DISABLED_MESSAGE: &str =
     "OIDC login is not allowed by the current forced_login_method setting.";
 
@@ -208,13 +206,7 @@ pub async fn run_login_with_oidc(cli_config_overrides: CliConfigOverrides) -> ! 
         _ => {}
     }
 
-    let oidc_config = match &config.oidc {
-        Some(c) => c.clone(),
-        None => {
-            eprintln!("{OIDC_CONFIG_MISSING_MESSAGE}");
-            std::process::exit(1);
-        }
-    };
+    let oidc_config = config.oidc.clone().unwrap_or_default();
 
     let opts = OidcLoginOptions {
         codex_home: config.codex_home.clone(),

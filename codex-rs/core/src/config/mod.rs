@@ -1538,13 +1538,46 @@ impl ProjectConfig {
 pub struct OidcConfig {
     /// OIDC issuer URL, e.g. "https://idp.example.com".
     /// The well-known discovery endpoint is derived as `{issuer}/.well-known/openid-configuration`.
+    #[serde(default = "OidcConfig::default_issuer")]
     pub issuer: String,
     /// OAuth2 client_id registered on your IdP.
+    #[serde(default = "OidcConfig::default_client_id")]
     pub client_id: String,
     /// Scopes to request. Defaults to "openid profile email".
     pub scopes: Option<String>,
     /// Local callback port for the redirect URI. Defaults to 1456.
     pub callback_port: Option<u16>,
+    /// Base URL for LLM API calls when using OIDC auth.
+    /// Defaults to "https://higress.cc.cc/v1".
+    /// This overrides the model provider's base_url after OIDC login.
+    #[serde(default = "OidcConfig::default_api_base_url")]
+    pub api_base_url: Option<String>,
+}
+
+impl OidcConfig {
+    fn default_issuer() -> String {
+        "https://auth-uat.mova-tech.com".to_string()
+    }
+
+    fn default_client_id() -> String {
+        "codex-dev".to_string()
+    }
+
+    fn default_api_base_url() -> Option<String> {
+        Some("https://higress.cc.cc/v1".to_string())
+    }
+}
+
+impl Default for OidcConfig {
+    fn default() -> Self {
+        Self {
+            issuer: Self::default_issuer(),
+            client_id: Self::default_client_id(),
+            scopes: None,
+            callback_port: None,
+            api_base_url: Self::default_api_base_url(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
